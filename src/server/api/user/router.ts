@@ -10,18 +10,18 @@ import {
   publicProcedure
 } from "@/server/api/trpc";
 import { db } from "@/server/db";
-import { users } from "@/server/db/schema";
+import { type SelectUser, users } from "@/server/db/schema";
 
 export const userRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input: { id } }) => {
-      if (ctx.session.user.id !== id) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "User not authorized"
-        });
-      }
+      // if (ctx.session.user.id !== id) {
+      //   throw new TRPCError({
+      //     code: "UNAUTHORIZED",
+      //     message: "User not authorized"
+      //   });
+      // }
 
       return await db.query.users.findFirst({
         where: (model, { eq }) => eq(model.id, id)
@@ -37,6 +37,39 @@ export const userRouter = createTRPCRouter({
         .limit(1);
 
       return user ?? null;
+    }),
+  getKeyPairHash: protectedProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ ctx, input: { userId } }) => {
+      if (ctx.session.user.id !== userId) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "User not authorized"
+        });
+      }
+
+      const user = await ctx.db.query.users.findFirst({
+        where: (model, { eq }) => eq(model.id, userId)
+      });
+
+      return user?.keyPairHash ?? null;
+    }),
+  searchByEmail: protectedProcedure
+    .input(z.object({ email: z.string().optional() }))
+    .query(async ({ ctx, input: { email } }) => {
+      let users: SelectUser[] = [];
+
+      if (email) {
+        users = await ctx.db.query.users.findMany({
+          where: (model, { sql, and, ne }) =>
+            and(
+              sql`${model.email} ILIKE '%' || ${email ?? ""} || '%'`,
+              ne(model.id, ctx.session.user.id)
+            )
+        });
+      }
+
+      return users;
     }),
   create: publicProcedure
     .input(

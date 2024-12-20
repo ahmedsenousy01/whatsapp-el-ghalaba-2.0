@@ -1,42 +1,41 @@
 import { Suspense } from "react";
 
-import { type Metadata } from "next";
 import { SessionProvider } from "next-auth/react";
 
 import { GeistSans } from "geist/font/sans";
 
-import { PollingServiceProvider } from "@/app/_components/providers/polling-service-provider";
-import { RSAKeyGenerationProvider } from "@/app/_components/providers/rsa-key-generation-provider";
+import { Providers } from "@/app/_components/providers";
 import { Toaster } from "@/components/ui/toaster";
 import { auth } from "@/server/auth";
 import "@/styles/globals.css";
 import { TRPCReactProvider } from "@/trpc/react";
 
-export const metadata: Metadata = {
+export const metadata = {
   title: "Whatsapp El Ghalaba",
-  description: "A Safer and more Secure Whatsapp",
+  description: "A secure chat application",
   icons: [{ rel: "icon", url: "/favicon.ico" }]
 };
 
 export default async function RootLayout({
   children
-}: Readonly<{ children: React.ReactNode }>) {
+}: {
+  children: React.ReactNode;
+}) {
   const session = await auth();
+
   return (
     <html
       lang="en"
-      className={`${GeistSans.variable}`}
+      className={GeistSans.variable}
     >
-      <body>
+      <body className="min-h-screen bg-background font-sans antialiased">
         <SessionProvider session={session}>
           <TRPCReactProvider>
-            <Suspense>
-              <PollingServiceProvider>
-                <RSAKeyGenerationProvider>{children}</RSAKeyGenerationProvider>
-              </PollingServiceProvider>
-            </Suspense>
+            <Providers>
+              <Suspense>{children}</Suspense>
+            </Providers>
+            <Toaster />
           </TRPCReactProvider>
-          <Toaster />
         </SessionProvider>
       </body>
     </html>

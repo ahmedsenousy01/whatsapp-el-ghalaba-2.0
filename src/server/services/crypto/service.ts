@@ -1,14 +1,16 @@
 import crypto from "crypto";
 
 interface RSAKeyPair {
-  publicKey: {
+  publicKeyParts: {
     n: bigint;
     e: bigint;
   };
-  privateKey: {
+  publicKey: string;
+  privateKeyParts: {
     n: bigint;
     d: bigint;
   };
+  privateKey: string;
 }
 
 type Byte = number;
@@ -88,46 +90,78 @@ export class CryptoService {
     const d = this.modInverse(e, phiN);
 
     return {
-      publicKey: { n, e },
-      privateKey: { n, d }
+      publicKeyParts: { n, e },
+      publicKey: `${n.toString(16)}.${e.toString(16)}`,
+      privateKeyParts: { n, d },
+      privateKey: `${n.toString(16)}.${d.toString(16)}`
     };
   }
 
-  public static encryptRSA(plaintext: string, n: bigint, e: bigint): Buffer[] {
-    const MAX_CHUNK_SIZE = 245; // Maximum size for 2048-bit RSA
-    if (plaintext.length > MAX_CHUNK_SIZE * 1000) {
-      throw new Error(
-        `Message too long. Maximum length is ${MAX_CHUNK_SIZE * 1000} characters`
-      );
-    }
+  public static encryptRSA(
+    plaintext: string,
+    publicKey: string
+  ): { data: string | null; error: string | null } {
+    try {
+      // Extract n and e from the publicKey
+      const publicKeyComponents = publicKey.split(".");
+      const n = BigInt("0x" + publicKeyComponents[0]);
+      const e = BigInt("0x" + publicKeyComponents[1]);
 
-    const chunks: Buffer[] = [];
-    for (let i = 0; i < plaintext.length; i += MAX_CHUNK_SIZE) {
-      const chunk = plaintext.slice(i, i + MAX_CHUNK_SIZE);
-      const chunkBytes = Buffer.from(chunk, "utf8");
-      const chunkInt = BigInt("0x" + chunkBytes.toString("hex"));
-      const encryptedChunk = this.modExp(chunkInt, e, n);
-      chunks.push(Buffer.from(encryptedChunk.toString(16), "hex"));
-    }
+      // RSA key size determines the chunk size (hexadecimal digits)
+      const chunkSize = Math.ceil(n.toString(16).length / 2) * 2;
 
-    return chunks;
+      let ciphertext = "";
+
+      for (let i = 0; i < plaintext.length; i += chunkSize) {
+        const chunk = plaintext.slice(i, i + chunkSize);
+        const chunkBytes = Buffer.from(chunk, "utf8");
+        const chunkInt = BigInt("0x" + chunkBytes.toString("hex"));
+        const encryptedChunk = this.modExp(chunkInt, e, n);
+        ciphertext += encryptedChunk.toString(16).padStart(chunkSize, "0");
+      }
+
+      return { data: ciphertext, error: null };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : "RSA encryption failed"
+      };
+    }
   }
 
-  public static decryptRSA(ciphertext: Buffer[], n: bigint, d: bigint): string {
-    let plaintext = "";
+  public static decryptRSA(
+    ciphertextHex: string,
+    privateKey: string
+  ): { data: string | null; error: string | null } {
+    try {
+      // Extract n and d from the privateKey
+      const privateKeyComponents = privateKey.split(".");
+      const n = BigInt("0x" + privateKeyComponents[0]);
+      const d = BigInt("0x" + privateKeyComponents[1]);
 
-    for (const chunk of ciphertext) {
-      if (chunk.length === 0) {
-        throw new Error("Invalid ciphertext chunk: empty buffer");
+      // RSA key size determines the chunk size (hexadecimal digits)
+      const chunkSize = Math.ceil(n.toString(16).length / 2) * 2;
+
+      let plaintext = "";
+
+      for (let i = 0; i < ciphertextHex.length; i += chunkSize) {
+        const chunkHex = ciphertextHex.slice(i, i + chunkSize);
+        const encryptedChunk = BigInt("0x" + chunkHex);
+        const decryptedChunk = this.modExp(encryptedChunk, d, n);
+        const hexString = decryptedChunk.toString(16);
+
+        // Ensure the decrypted chunk is properly padded for hex decoding
+        const paddedHex = hexString.length % 2 ? "0" + hexString : hexString;
+        plaintext += Buffer.from(paddedHex, "hex").toString("utf8");
       }
-      const encryptedChunk = BigInt("0x" + chunk.toString("hex"));
-      const decryptedChunk = this.modExp(encryptedChunk, d, n);
-      const hexString = decryptedChunk.toString(16);
-      const paddedHex = hexString.length % 2 ? "0" + hexString : hexString;
-      plaintext += Buffer.from(paddedHex, "hex").toString("utf8");
-    }
 
-    return plaintext;
+      return { data: plaintext, error: null };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : "RSA decryption failed"
+      };
+    }
   }
 
   // AES Methods
@@ -142,74 +176,102 @@ export class CryptoService {
     return key.join("");
   }
 
-  public static encryptAES(plaintext: string, key: string): string {
-    const keyBytes = this.stringToBytes(key);
-    if (keyBytes.length !== 16) {
-      throw new Error("Key must be exactly 16 bytes (16 characters) long");
-    }
-    const bytes = this.stringToBytes(plaintext);
-    const paddedBytes = this.padInput(bytes);
-    const keyMatrix = this.bytesToMatrix(keyBytes);
-    const expandedKeys = this.keyExpansion(keyMatrix);
-    const encrypted = new Uint8Array(paddedBytes.length);
+  public static encryptAES(
+    plaintext: string,
+    key: string
+  ): { data: string | null; error: string | null } {
+    try {
+      const keyBytes = this.stringToBytes(key);
+      if (keyBytes.length !== 16) {
+        return {
+          data: null,
+          error: "Key must be exactly 16 bytes (16 characters) long"
+        };
+      }
 
-    for (let i = 0; i < paddedBytes.length; i += 16) {
-      const block = paddedBytes.slice(i, i + 16);
-      const state = this.bytesToMatrix(block);
+      const bytes = this.stringToBytes(plaintext);
+      const paddedBytes = this.padInput(bytes);
+      const keyMatrix = this.bytesToMatrix(keyBytes);
+      const expandedKeys = this.keyExpansion(keyMatrix);
+      const encrypted = new Uint8Array(paddedBytes.length);
 
-      this.addRoundKey(state, expandedKeys[0]!);
+      for (let i = 0; i < paddedBytes.length; i += 16) {
+        const block = paddedBytes.slice(i, i + 16);
+        const state = this.bytesToMatrix(block);
 
-      for (let round = 1; round < 10; round++) {
+        this.addRoundKey(state, expandedKeys[0]!);
+
+        for (let round = 1; round < 10; round++) {
+          this.subBytes(state);
+          this.shiftRows(state);
+          this.mixColumns(state);
+          this.addRoundKey(state, expandedKeys[round]!);
+        }
+
         this.subBytes(state);
         this.shiftRows(state);
-        this.mixColumns(state);
-        this.addRoundKey(state, expandedKeys[round]!);
+        this.addRoundKey(state, expandedKeys[10]!);
+
+        const encryptedBlock = this.matrixToBytes(state);
+        encrypted.set(encryptedBlock, i);
       }
 
-      this.subBytes(state);
-      this.shiftRows(state);
-      this.addRoundKey(state, expandedKeys[10]!);
-
-      const encryptedBlock = this.matrixToBytes(state);
-      encrypted.set(encryptedBlock, i);
+      return { data: this.bytesToHex(encrypted), error: null };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : "AES encryption failed"
+      };
     }
-
-    return this.bytesToHex(encrypted);
   }
 
-  public static decryptAES(ciphertext: string, key: string): string {
-    const keyBytes = this.stringToBytes(key);
-    if (keyBytes.length !== 16) {
-      throw new Error("Key must be exactly 16 bytes (16 characters) long");
-    }
-    const bytes = this.hexToBytes(ciphertext);
-    const keyMatrix = this.bytesToMatrix(keyBytes);
-    const expandedKeys = this.keyExpansion(keyMatrix);
-    const decrypted = new Uint8Array(bytes.length);
-
-    for (let i = 0; i < bytes.length; i += 16) {
-      const block = bytes.slice(i, i + 16);
-      const state = this.bytesToMatrix(block);
-
-      this.addRoundKey(state, expandedKeys[10]!);
-      this.invShiftRows(state);
-      this.invSubBytes(state);
-
-      for (let round = 9; round >= 1; round--) {
-        this.addRoundKey(state, expandedKeys[round]!);
-        this.invMixColumns(state);
-        this.invShiftRows(state);
-        this.invSubBytes(state);
+  public static decryptAES(
+    ciphertext: string,
+    key: string
+  ): { data: string | null; error: string | null } {
+    try {
+      const keyBytes = this.stringToBytes(key);
+      if (keyBytes.length !== 16) {
+        return {
+          data: null,
+          error: "Key must be exactly 16 bytes (16 characters) long"
+        };
       }
 
-      this.addRoundKey(state, expandedKeys[0]!);
+      const bytes = this.hexToBytes(ciphertext);
+      const keyMatrix = this.bytesToMatrix(keyBytes);
+      const expandedKeys = this.keyExpansion(keyMatrix);
+      const decrypted = new Uint8Array(bytes.length);
 
-      const decryptedBlock = this.matrixToBytes(state);
-      decrypted.set(decryptedBlock, i);
+      for (let i = 0; i < bytes.length; i += 16) {
+        const block = bytes.slice(i, i + 16);
+        const state = this.bytesToMatrix(block);
+
+        this.addRoundKey(state, expandedKeys[10]!);
+        this.invShiftRows(state);
+        this.invSubBytes(state);
+
+        for (let round = 9; round >= 1; round--) {
+          this.addRoundKey(state, expandedKeys[round]!);
+          this.invMixColumns(state);
+          this.invShiftRows(state);
+          this.invSubBytes(state);
+        }
+
+        this.addRoundKey(state, expandedKeys[0]!);
+
+        const decryptedBlock = this.matrixToBytes(state);
+        decrypted.set(decryptedBlock, i);
+      }
+
+      const unpaddedBytes = this.removePadding(decrypted);
+      return { data: this.bytesToString(unpaddedBytes), error: null };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : "AES decryption failed"
+      };
     }
-
-    const unpaddedBytes = this.removePadding(decrypted);
-    return this.bytesToString(unpaddedBytes);
   }
 
   // RSA Helper Methods

@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 
+import { signIn } from "next-auth/react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -28,11 +28,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import { signUpSchema } from "@/schemas/auth";
+import { DEFAULT_REDIRECT_ROUTE } from "@/server/auth/routes";
 import { api } from "@/trpc/react";
 
 export default function RegistrationPage() {
   const { mutateAsync: createUser } = api.user.create.useMutation();
-  const router = useRouter();
   const [apiError, setApiError] = useState<string | null>(null);
   const form = useForm<z.infer<typeof signUpSchema>>({
     resolver: zodResolver(signUpSchema),
@@ -49,7 +49,12 @@ export default function RegistrationPage() {
     try {
       await createUser(values);
       toast({ title: "Account created successfully" });
-      router.push("/auth/login");
+      await signIn("credentials", {
+        redirect: true,
+        redirectTo: DEFAULT_REDIRECT_ROUTE,
+        email: values.email,
+        password: values.password
+      });
     } catch (error) {
       setApiError((error as Error).message ?? "Unknown error");
     }
